@@ -19,8 +19,8 @@ predictor.set_image("../../data/input/sample_img.jpeg")
 results = predictor(text=["Laptop", "Coffe table"])
 print(results)
 
-# # Works with descriptive phrases
-# results = predictor(text=["Laptop screen", "brown cloth on sofa"])
+# Works with descriptive phrases
+results = predictor(text=["Laptop screen", "brown cloth on sofa"])
 
 # # Query with a single concept
 # results = predictor(text=["a ceraVe cream bottle"])

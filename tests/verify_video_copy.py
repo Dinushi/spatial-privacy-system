@@ -58,8 +58,8 @@ def compare_videos(path1, path2, diff_threshold=5.0):
 
 
 def main():
-    input_path = "../data/input/sample.mp4"
-    output_path = "../data/output/copied.mp4"
+    input_path = "../data/input/sample0.mp4"
+    output_path = "../data/output/out0.mp4"
 
     print("Checking frame counts...")
 

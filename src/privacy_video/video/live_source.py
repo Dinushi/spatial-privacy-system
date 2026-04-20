@@ -3,8 +3,8 @@ from __future__ import annotations
 import time
 import cv2
 
-from privacy_video.models import FramePacket, VideoInfo
-from privacy_video.video.video_source_base import VideoSource
+from models import FramePacket, VideoInfo
+from video.video_source_base import VideoSource
 
 class LiveVideoSource(VideoSource):
     """

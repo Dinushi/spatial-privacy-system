@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 
-from privacy_video.pipeline import copy_video
+from pipeline import copy_video
 
 
 def build_parser() -> argparse.ArgumentParser:

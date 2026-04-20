@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from privacy_video.models import FramePacket, VideoInfo
+from models import FramePacket, VideoInfo
 
 
 class VideoSource(ABC):

@@ -1,4 +1,4 @@
-from privacy_video.video import FileVideoSource, VideoWriter
+from video import FileVideoSource, VideoWriter
 
 
 def copy_video(input_path: str, output_path: str) -> None:
