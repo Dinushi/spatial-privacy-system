@@ -6,6 +6,7 @@ from typing import Any, List, Optional, Tuple
 import numpy as np
 
 from privacy_video.models.SAM_result import DetectedObject, FrameDetections
+from privacy_video.security.object_id_assigner import StableObjectIdAssigner
 
 
 class SAMProcessor:
@@ -89,6 +90,7 @@ class SAMProcessor:
     def _parse_result(
         self,
         result: Any,
+        objectID_assigner : StableObjectIdAssigner,
         frame_idx: int,
         source_path: str,
     ) -> FrameDetections:
@@ -143,9 +145,16 @@ class SAMProcessor:
                 raw_mask = (mask_list[obj_idx] > 0.5).astype(np.uint8)
                 mask = self._resize_mask_to_orig(raw_mask, orig_shape)
 
+            # a custom object ID tracker number unique to each object accross each frame
+            object_id = objectID_assigner.assign(
+                frame_idx=frame_idx,
+                label=label,
+                bbox=bbox,
+            )
             objects.append(
                 DetectedObject(
                     object_idx=obj_idx,
+                    custom_tracked_object_id = object_id,
                     label=label,
                     class_id=class_id,
                     confidence=confidence,
@@ -165,6 +174,7 @@ class SAMProcessor:
         self,
         image_path: str | Path,
         prompts: List[str],
+        objectID_assigner : StableObjectIdAssigner,
     ) -> FrameDetections:
         image_path = str(image_path)
 
@@ -180,12 +190,13 @@ class SAMProcessor:
                 objects=[],
             )
 
-        return self._parse_result(results[0], frame_idx=0, source_path=image_path)
+        return self._parse_result(results[0], objectID_assigner, frame_idx=0, source_path=image_path)
 
     def process_video(
         self,
         video_path: str | Path,
         prompts: List[str],
+        objectID_assigner : StableObjectIdAssigner,
         stream: bool = False,
     ) -> List[FrameDetections]:
         video_path = str(video_path)
@@ -197,7 +208,7 @@ class SAMProcessor:
 
         for frame_idx, result in enumerate(results):
             frame_results.append(
-                self._parse_result(result, frame_idx=frame_idx, source_path=video_path)
+                self._parse_result(result, objectID_assigner, frame_idx=frame_idx, source_path=video_path)
             )
 
         return frame_results
