@@ -13,6 +13,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--prompts", nargs="*", default=None, help="Optional prompt list")
     parser.add_argument("--model", default="../models/sam3.1_multiplex.pt", help="Path to SAM3 model")
     parser.add_argument("--output-root", default="../data/output", help="Directory to save outputs")
+    parser.add_argument("--crop-mode", choices=["mask", "bbox"], default="mask", help="Use mask or bbox for cropping/blur")
+    parser.add_argument("--public-key", default="../keys/device_public.pem", help="Path to device RSA public key PEM file")
+    parser.add_argument("--embed-payloads", action="store_true", help="Embed encrypted payloads into final blurred media file") # this should be true most of the time
     return parser
 
 
@@ -29,6 +32,9 @@ def main() -> None:
         model_path=args.model,
         output_root=predict_output_folder,
         prompts=args.prompts,
+        crop_mode=args.crop_mode,
+        public_key_path=args.public_key,
+        embed_payloads=args.embed_payloads,
     )
 
     print("Done.")
@@ -39,5 +45,5 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 
-    # python3 main.py --source ../data/input/sample_img.jpeg
-    # python3 main.py --source ../data/input/sample1.mp4
+    # python3 main.py --source ../data/input/sample_img.jpeg --crop-mode mask --embed-payloads
+    # python3 main.py --source ../data/input/sample1.mp4 --crop-mode bbox --embed-payloads
