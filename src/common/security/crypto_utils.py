@@ -111,3 +111,35 @@ def encrypt_json_hybrid(public_key, payload: Dict[str, Any]) -> Dict[str, Any]:
         },
         "ciphertext": enc["ciphertext"],
     }
+
+def load_private_key(private_key_path: str | Path, password: bytes | None = None):
+    data = Path(private_key_path).read_bytes()
+    return serialization.load_pem_private_key(data, password=password)
+
+
+def rsa_unwrap_key(private_key, wrapped_key_b64: str) -> bytes:
+    wrapped = b64d(wrapped_key_b64)
+    return private_key.decrypt(
+        wrapped,
+        padding.OAEP(
+            mgf=padding.MGF1(algorithm=hashes.SHA256()),
+            algorithm=hashes.SHA256(),
+            label=None,
+        ),
+    )
+
+
+def decrypt_json_hybrid(private_key, encrypted_payload: Dict[str, Any]) -> Dict[str, Any]:
+    if encrypted_payload.get("enc_alg") != "HYBRID-RSA-OAEP-SHA256+AES-256-GCM":
+        raise ValueError(f"Unsupported enc_alg: {encrypted_payload.get('enc_alg')}")
+
+    content_key = rsa_unwrap_key(private_key, encrypted_payload["wrapped_key"])
+
+    plaintext = aes_gcm_decrypt(
+        key=content_key,
+        nonce_b64=encrypted_payload["crypto"]["nonce"],
+        tag_b64=encrypted_payload["crypto"]["tag"],
+        ciphertext_b64=encrypted_payload["ciphertext"],
+    )
+
+    return json.loads(plaintext.decode("utf-8"))

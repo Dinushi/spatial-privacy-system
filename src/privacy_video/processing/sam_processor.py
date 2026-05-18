@@ -4,9 +4,13 @@ from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
 import numpy as np
+import torch
+
 
 from privacy_video.models.SAM_result import DetectedObject, FrameDetections
 from privacy_video.security.object_id_assigner import StableObjectIdAssigner
+
+from ultralytics.models.sam import SAM3SemanticPredictor
 
 
 class SAMProcessor:
@@ -21,22 +25,23 @@ class SAMProcessor:
         conf: float = 0.25,
         imgsz: int = 640,
         half: bool = False,
+        vid_stride: int = 1,
     ) -> None:
         self.model_path = str(model_path)
         self.conf = conf
         self.imgsz = imgsz
         self.half = half
+        self.vid_stride = vid_stride
 
     def _make_image_predictor(self):
-        from ultralytics.models.sam import SAM3SemanticPredictor
-
+   
         overrides = dict(
             conf=self.conf,
             task="segment",
             mode="predict",
             model=self.model_path,
             half=self.half,
-            save=False,
+            save=True,
         )
         return SAM3SemanticPredictor(overrides=overrides)
 
@@ -50,6 +55,7 @@ class SAMProcessor:
             imgsz=self.imgsz,
             model=self.model_path,
             half=self.half,
+            vid_stride=self.vid_stride, # to introduce any frame skip
             save=False,
         )
         return SAM3VideoSemanticPredictor(overrides=overrides)
@@ -145,12 +151,14 @@ class SAMProcessor:
                 raw_mask = (mask_list[obj_idx] > 0.5).astype(np.uint8)
                 mask = self._resize_mask_to_orig(raw_mask, orig_shape)
 
-            # a custom object ID tracker number unique to each object accross each frame
+            # a custom object ID tracker number unique to each object accross each frame, this is a modication in introduced later
+            # TODO: this might still not getting tracked, may be better to simply use the label to apply same key to single label
             object_id = objectID_assigner.assign(
                 frame_idx=frame_idx,
                 label=label,
                 bbox=bbox,
             )
+            # TODO: simplify the objectIdx assigment to a simple one
             objects.append(
                 DetectedObject(
                     object_idx=obj_idx,
@@ -201,14 +209,25 @@ class SAMProcessor:
     ) -> List[FrameDetections]:
         video_path = str(video_path)
 
+        print("Some environment checks before video predictor creation =>")
+        print("\tCUDA available:", torch.cuda.is_available())
+        print("\tGPU count:", torch.cuda.device_count())
+        if torch.cuda.is_available():
+            print("\t\tCurrent GPU:", torch.cuda.current_device())
+            print("\t\tGPU name:", torch.cuda.get_device_name(torch.cuda.current_device()))
+
         predictor = self._make_video_predictor()
         results = predictor(source=video_path, text=prompts, stream=stream)
+        # print(f"SAM original Results for whole video: {results}")
 
         frame_results: List[FrameDetections] = []
 
-        for frame_idx, result in enumerate(results):
+        for sampled_idx, result in enumerate(results):
+            # track back to original frame_idx set when frame skipping is applied, this multiplication reset the frameId by SAM to its original frame id in the full video
+            original_frame_idx = sampled_idx * self.vid_stride
+
             frame_results.append(
-                self._parse_result(result, objectID_assigner, frame_idx=frame_idx, source_path=video_path)
+                self._parse_result(result, objectID_assigner, frame_idx=original_frame_idx, source_path=video_path)
             )
 
         return frame_results

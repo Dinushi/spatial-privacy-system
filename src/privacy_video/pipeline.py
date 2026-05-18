@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 
 import cv2
 import numpy as np
+import time
 
 from privacy_video.metadata.json_writer import JSONWriter
 from privacy_video.models.SAM_result import FrameDetections
@@ -15,6 +16,8 @@ from privacy_video.processing.blur_processor import BlurProcessor
 from privacy_video.processing.crop_extractor import CropExtractor
 from privacy_video.processing.privacy_prompt_processor import PrivacyPromptProcessor
 from privacy_video.processing.sam_processor import SAMProcessor
+from privacy_video.processing.fast_sam_processor import FastSAMProcessor
+from privacy_video.processing.fast_sam_trackingprocessor import FastSAMTrackProcessor
 from privacy_video.utils.file_utils import is_image_file, is_video_file
 
 from common.security import (
@@ -69,9 +72,11 @@ def run_privacy_pipeline(
     source_path: str | Path,
     model_path: str | Path,
     output_root: str | Path,
+    SAM_type: str = None,
     prompts: Optional[List[str]] = None,
     crop_mode: str = "mask",
     public_key_path: str | Path | None = None,
+    video_stride: int = 1,
     embed_payloads: bool = False,
 ) -> Dict[str, Any]:
     source_path = str(source_path)
@@ -84,13 +89,32 @@ def run_privacy_pipeline(
     # a unique id for a processed media asset, which connect all generated files
     media_id = _make_media_id()
 
+    print("Create SAM Processor Object")
     # create required process objects
-    sam_processor = SAMProcessor(
-        model_path=model_path,
-        conf=0.25,
-        imgsz=640,
-        half=False,  # keep stable for now
-    )
+
+    if (SAM_type == "SAM3"):
+        sam_processor = SAMProcessor(
+            model_path=model_path,
+            conf=0.25,
+            imgsz=640,
+            half=False,  # keep stable for now
+            vid_stride = video_stride
+        )
+    else:
+        sam_processor = FastSAMProcessor(
+            model_path=model_path,
+            conf=0.25,
+            imgsz=1024,
+            half=True,
+            # vvid_stride = video_stride
+        )
+        # sam_processor = FastSAMTrackProcessor(
+        #     model_path=model_path,
+        #     imgsz=640,
+        #     conf=0.25,
+        #     vid_stride=2,
+        # )
+
     blur_processor = BlurProcessor()
     crop_extractor = CropExtractor(output_root / "extracted_private_objects")
     object_assigner = StableObjectIdAssigner()
@@ -198,8 +222,12 @@ def run_privacy_pipeline(
         # return metadata
       
     elif is_video_file(source_path):
-        print("Start processing Video ->")
-        frame_detections = sam_processor.process_video(source_path, prompts, stream=False)
+        # whole video is processed by SAM at once, no need to pass frame by frame
+        print("Start processing Video using SAM ----------------------->")
+        start_time = time.time()
+        frame_detections = sam_processor.process_video(source_path, prompts, object_assigner, stream=False)
+        end_time = time.time()
+        total_sec_for_sam_exec = end_time - start_time
 
         cap = cv2.VideoCapture(source_path)
         if not cap.isOpened():
@@ -226,35 +254,78 @@ def run_privacy_pipeline(
 
         frames_meta: List[Dict[str, Any]] = []
 
+        print("Apply SAM detections as actual masks on video ------------------------>")
         try:
+            start_time = time.time()
             for frame_det in frame_detections:
-                ok, original = cap.read()
-                if not ok or original is None:
-                    break
+                original_frame_idx = frame_det.frame_idx
+                print(f"Frame index of the current frame detection from SAM: {original_frame_idx}")
+                cap.set(cv2.CAP_PROP_POS_FRAMES, original_frame_idx) # ask reader to jump to a specific frame number
 
-                frame = original.copy()
-                crop_paths: List[Optional[str]] = []
+                # this ensures the original frames are processed one by one and propogate detetections if frame-skip has enabled in SAM detections
+                for i in range(video_stride):
+                    ok, original = cap.read() # reads the next frame
+                    if not ok or original is None:
+                        break
 
-                for det in frame_det.objects:
-                    if crop_mode == "mask" and det.mask is None:
-                        frame = blur_processor.process(frame, mask=det.mask)
-                        crop = crop_extractor.extract_mask_crop(original, det.mask, bbox=det.bbox)
-                    elif det.bbox is not None:
-                        frame = blur_processor.process(frame, bbox=det.bbox)
-                        crop = crop_extractor.extract_bbox_crop(original, det.bbox)
-                    else:
-                        crop_paths.append(None)
-                        continue
+                    current_frame_id = original_frame_idx + i
+                    print(f"\tCurrent frame ID to propagate data: {current_frame_id}")
+                    current_frame = original.copy()
+                    crop_paths: List[Optional[str]] = []
 
-                    crop_path = crop_extractor.save_crop(
-                        crop=crop,
-                        frame_idx=frame_det.frame_idx,
-                        object_idx=det.object_idx,
-                        label=det.label,
-                    )
-                    crop_paths.append(crop_path)
+                    protected_frame = current_frame
+                    for det in frame_det.objects:
 
-                writer.write(frame)
+                        object_id = det.custom_tracked_object_id
+                        bbox = tuple(det.bbox) if det.bbox is not None else None
+
+                        if crop_mode == "mask" and det.mask is not None:
+                            protected_frame = blur_processor.process(protected_frame, mask=det.mask)
+                            crop = crop_extractor.extract_mask_crop(original, det.mask, bbox=det.bbox)
+                        elif det.bbox is not None:
+                            protected_frame = blur_processor.process(protected_frame, bbox=det.bbox)
+                            crop = crop_extractor.extract_bbox_crop(original, det.bbox)
+                        else:
+                            crop_paths.append(None)
+                            continue
+
+                        crop_path = crop_extractor.save_crop(
+                            crop=crop,
+                            frame_idx=current_frame_id,
+                            object_idx=det.object_idx,
+                            label=det.label,
+                        )
+                        crop_paths.append(crop_path)
+
+                        # create a entry for each region
+                        region_id = f"reg_{region_counter}"
+                        region_counter += 1
+                        obj_key = get_or_create_object_key(object_id)
+                        region_entry = build_region_entry(
+                            RegionEntryInput(
+                                region_id=region_id,
+                                object_id=object_id,
+                                frame_idx=frame_det.frame_idx,
+                                bbox=bbox,
+                                crop=crop,
+                                placement_mode=crop_mode,
+                                mask=det.mask,
+                            ),
+                            obj_key,
+                        )
+                        region_entries.append(region_entry)
+                        object_regions[object_id].append(region_id)
+
+                        if object_id not in object_meta:
+                            object_meta[object_id] = {
+                                "object_id": object_id,
+                                "label": det.label,
+                                "class_id": det.class_id,
+                                "first_frame_idx": 0,
+                                "last_frame_idx": 0,
+                                "region_ids": [],
+                            }
+                    writer.write(protected_frame)
 
                 frame_meta = _frame_detection_to_metadata(frame_det, crop_paths)
                 frame_meta["timestamp_sec"] = frame_det.frame_idx / fps
@@ -262,20 +333,27 @@ def run_privacy_pipeline(
         finally:
             cap.release()
             writer.release()
+        end_time = time.time()
+        total_sec_for_frame_masking = start_time - end_time
 
-        metadata = {
-            "input_type": "video",
-            "input_path": source_path,
-            "prompts": prompts,
-            "blurred_output_path": str(blurred_path),
-            "fps": fps,
-            "width": width,
-            "height": height,
-            "frames": frames_meta,
-        }
+        print(f"SAM processing time : {total_sec_for_sam_exec}")
+        print(f"Frame masking + optional propagation time : {total_sec_for_frame_masking}")
+        frames_meta_for_verification = frames_meta
+        media_type = "video"
+        
+        # metadata = {
+        #     "input_type": "video",
+        #     "input_path": source_path,
+        #     "prompts": prompts,
+        #     "blurred_output_path": str(blurred_path),
+        #     "fps": fps,
+        #     "width": width,
+        #     "height": height,
+        #     "frames": frames_meta,
+        # }
 
-        JSONWriter(output_root / "metadata.json").write(metadata)
-        return metadata
+        # JSONWriter(output_root / "metadata.json").write(metadata)
+        # return metadata
     else:
         raise ValueError(f"Unsupported input type: {source_path}")
     
