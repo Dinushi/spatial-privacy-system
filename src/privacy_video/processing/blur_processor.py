@@ -7,7 +7,7 @@ import numpy as np
 
 
 class BlurProcessor:
-    def __init__(self, ksize: Tuple[int, int] = (201, 201)) -> None:
+    def __init__(self, ksize: Tuple[int, int] = (101, 101)) -> None:
         self.ksize = ksize
 
     def blur_bbox(

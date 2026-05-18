@@ -81,10 +81,9 @@ def main() -> None:
     end_time = time.time()
     total_sec = end_time - start_time
 
-    print("Done.")
     print(f"Input type: {metadata['input_type']}")
     print(f"Saved blurred output to: {metadata['blurred_output_path']}")
-    print(f"Total execution time: {total_sec/60:.2f} minutes")
+    print(f"Total Time (seconds): {total_sec:.2f}")
 
 
 if __name__ == "__main__":
@@ -107,7 +106,26 @@ if __name__ == "__main__":
  # python3 main.py --source ../data/input/AEA/AriaEverydayActivities_1.0.0_loc3_script5_seq6_rec1_preview_rgb_cropped_2.35_2.40.mp4  --prompts "smartphone screen" "underwear" "books" --crop-mode mask --vid-stride 5
 
 
+
+
 # python3 main.py --source ../data/input/AriaAEA_selected/AriaEverydayActivities_1.0.0_loc1_script3_seq2_rec1_preview_rgb_middle10s_10fps.mp4 --vid-stride 10
 
 # python3 main.py --source ../data/input/AriaAEA_selected/AriaEverydayActivities_1.0.0_loc1_script5_seq5_rec1_preview_rgb_middle10s_10fps.mp4 --vid-stride 10
+
+# python3 main.py --source ../data/input/AriaAEA_selected/AriaEverydayActivities_1.0.0_loc2_script5_seq2_rec1_preview_rgb_middle10s_10fps.mp4 --vid-stride 10
+# python3 main.py --source ../data/input/AriaAEA_selected/AriaEverydayActivities_1.0.0_loc2_script5_seq7_rec1_preview_rgb_middle10s_10fps.mp4 --vid-stride 10
+
+# python3 main.py --source ../data/input/AriaAEA_selected/AriaEverydayActivities_1.0.0_loc3_script2_seq3_rec2_preview_rgb_middle10s_10fps.mp4 --vid-stride 10
+
+# python3 main.py --source ../data/input/AriaAEA_selected/AriaEverydayActivities_1.0.0_loc3_script4_seq2_rec1_preview_rgb_middle10s_10fps.mp4 --vid-stride 10
+
+# python3 main.py --source ../data/input/AriaAEA_selected/AriaEverydayActivities_1.0.0_loc3_script5_seq3_rec1_preview_rgb_middle10s_10fps.mp4 --vid-stride 10
+# python3 main.py --source ../data/input/AriaAEA_selected/AriaEverydayActivities_1.0.0_loc3_script5_seq5_rec1_preview_rgb_middle10s_10fps.mp4 --vid-stride 10
+
+
+
+# python3 main.py --source ../data/input/RealWorld/quest_1.mp4
+# python3 main.py --source ../data/input/RealWorld/quest_2.mp4
+
+
 

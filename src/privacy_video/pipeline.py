@@ -13,6 +13,8 @@ import time
 from privacy_video.metadata.json_writer import JSONWriter
 from privacy_video.models.SAM_result import FrameDetections
 from privacy_video.processing.blur_processor import BlurProcessor
+from privacy_video.processing.blur_processor_single import CombinedMaskBlurProcessor
+from privacy_video.processing.blur_processor_single_roi import CombinedMaskBBoxROIBlurProcessor
 from privacy_video.processing.crop_extractor import CropExtractor
 from privacy_video.processing.privacy_prompt_processor import PrivacyPromptProcessor
 from privacy_video.processing.sam_processor import SAMProcessor
@@ -115,7 +117,10 @@ def run_privacy_pipeline(
         #     vid_stride=2,
         # )
 
-    blur_processor = BlurProcessor()
+    # blur_processor = BlurProcessor()
+    # blur_processor = CombinedMaskBlurProcessor()
+    blur_processor = CombinedMaskBBoxROIBlurProcessor()
+
     crop_extractor = CropExtractor(output_root / "extracted_private_objects")
     object_assigner = StableObjectIdAssigner()
 
@@ -226,8 +231,7 @@ def run_privacy_pipeline(
         print("Start processing Video using SAM ----------------------->")
         start_time = time.time()
         frame_detections = sam_processor.process_video(source_path, prompts, object_assigner, stream=False)
-        end_time = time.time()
-        total_sec_for_sam_exec = end_time - start_time
+        total_sec_for_sam_exec = time.time() - start_time
 
         cap = cv2.VideoCapture(source_path)
         if not cap.isOpened():
@@ -255,8 +259,8 @@ def run_privacy_pipeline(
         frames_meta: List[Dict[str, Any]] = []
 
         print("Apply SAM detections as actual masks on video ------------------------>")
+        start_time_masking = time.time()
         try:
-            start_time = time.time()
             for frame_det in frame_detections:
                 original_frame_idx = frame_det.frame_idx
                 print(f"Frame index of the current frame detection from SAM: {original_frame_idx}")
@@ -274,28 +278,39 @@ def run_privacy_pipeline(
                     crop_paths: List[Optional[str]] = []
 
                     protected_frame = current_frame
+                    frame_masks = []
+                    frame_bboxes = []
                     for det in frame_det.objects:
 
                         object_id = det.custom_tracked_object_id
                         bbox = tuple(det.bbox) if det.bbox is not None else None
 
                         if crop_mode == "mask" and det.mask is not None:
-                            protected_frame = blur_processor.process(protected_frame, mask=det.mask)
+                            # start_time = time.time()
+                            # protected_frame = blur_processor.process(protected_frame, mask=det.mask)
+                            # print(f"Masking time: {(time.time() - start_time)/60:.2f} minutes")
+                            frame_masks.append(det.mask)
+                            start_time = time.time()
                             crop = crop_extractor.extract_mask_crop(original, det.mask, bbox=det.bbox)
+                            print(f"Crop extraction time: {(time.time() - start_time):.6f} s")
+
+                            frame_bboxes.append(tuple(det.bbox))
                         elif det.bbox is not None:
-                            protected_frame = blur_processor.process(protected_frame, bbox=det.bbox)
+                            # protected_frame = blur_processor.process(protected_frame, bbox=det.bbox)
                             crop = crop_extractor.extract_bbox_crop(original, det.bbox)
                         else:
                             crop_paths.append(None)
                             continue
 
-                        crop_path = crop_extractor.save_crop(
-                            crop=crop,
-                            frame_idx=current_frame_id,
-                            object_idx=det.object_idx,
-                            label=det.label,
-                        )
-                        crop_paths.append(crop_path)
+                        #this is an addition step to save cropped version of every masked object for verification purposes
+                        # TODO: comment when run for evaluations
+                        # crop_path = crop_extractor.save_crop(
+                        #     crop=crop,
+                        #     frame_idx=current_frame_id,
+                        #     object_idx=det.object_idx,
+                        #     label=det.label,
+                        # )
+                        # crop_paths.append(crop_path)
 
                         # create a entry for each region
                         region_id = f"reg_{region_counter}"
@@ -325,6 +340,12 @@ def run_privacy_pipeline(
                                 "last_frame_idx": 0,
                                 "region_ids": [],
                             }
+                    start_time = time.time()
+                    # protected_frame = blur_processor.process(protected_frame, masks=frame_masks)
+                    # print(f"Masking time (all object masked collected together and masking applied once): {(time.time() - start_time)/60:.2f} minutes")
+
+                    protected_frame = blur_processor.process(protected_frame, masks=frame_masks,bboxes=frame_bboxes)
+                    print(f"Masking time (collected masks on union RoI) seconds: {(time.time() - start_time):.2f}")
                     writer.write(protected_frame)
 
                 frame_meta = _frame_detection_to_metadata(frame_det, crop_paths)
@@ -333,11 +354,9 @@ def run_privacy_pipeline(
         finally:
             cap.release()
             writer.release()
-        end_time = time.time()
-        total_sec_for_frame_masking = start_time - end_time
-
-        print(f"SAM processing time : {total_sec_for_sam_exec}")
-        print(f"Frame masking + optional propagation time : {total_sec_for_frame_masking}")
+    
+        print(f"SAM Time (seconds) : {(total_sec_for_sam_exec):.2f}")
+        print(f"Masking Time (seconds): {(time.time()- start_time_masking):.2f}")
         frames_meta_for_verification = frames_meta
         media_type = "video"
         
