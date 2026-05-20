@@ -5,12 +5,14 @@ from typing import Any, List, Optional, Tuple
 
 import numpy as np
 import torch
+import time
 
 
 from privacy_video.models.SAM_result import DetectedObject, FrameDetections
 from privacy_video.security.object_id_assigner import StableObjectIdAssigner
 
 from ultralytics.models.sam import SAM3SemanticPredictor
+from typing import Iterator
 
 
 class SAMProcessor:
@@ -68,7 +70,7 @@ class SAMProcessor:
 
         if isinstance(names, list) and 0 <= cls_id < len(names):
             return str(names[cls_id])
-
+        # if no names exist, fallback
         return f"object_{det_idx}"
 
     def _resize_mask_to_orig(
@@ -218,7 +220,7 @@ class SAMProcessor:
 
         predictor = self._make_video_predictor()
         results = predictor(source=video_path, text=prompts, stream=stream)
-        # print(f"SAM original Results for whole video: {results}")
+        # When stream = TRUE -> result does NOT contain actual results yet, only a generator, Inference only happens when you ask for the next item in the loop below
 
         frame_results: List[FrameDetections] = []
 
@@ -231,3 +233,110 @@ class SAMProcessor:
             )
 
         return frame_results
+    
+    def process_video_stream(
+        self,
+        video_path: str | Path,
+        prompts: List[str],
+    ) -> Iterator[FrameDetections]:
+        video_path = str(video_path)
+
+        predictor = self._make_video_predictor()
+        results = predictor(source=video_path, text=prompts, stream=True)
+
+        # for sampled_idx, result in enumerate(results): # IMPORTANT: SAM work happens when Python asks the generator for the next result, this is how we make use of steam
+        #     original_frame_idx = sampled_idx * self.vid_stride
+
+        #     yield self._parse_result_simple(
+        #         result=result,
+        #         frame_idx=original_frame_idx,
+        #         source_path=video_path,
+        #     )
+
+        results_iter = iter(results)
+        sampled_idx = 0
+
+        while True:
+            try:
+                start = time.time()
+                result = next(results_iter)   # IMPORTANT: SAM inference happens here
+                sam_time = time.time() - start
+            except StopIteration:
+                break
+
+            original_frame_idx = sampled_idx * self.vid_stride
+
+            frame_det = self._parse_result_simple(
+                result=result,
+                frame_idx=original_frame_idx,
+                source_path=video_path,
+            )
+
+            yield frame_det, sam_time
+
+            sampled_idx += 1
+
+    def _parse_result_simple(
+        self,
+        result: Any,
+        frame_idx: int,
+        source_path: str,
+    ) -> FrameDetections:
+        
+        print(f"Parsing Frame ID : {frame_idx} ------>")
+        boxes = getattr(result, "boxes", None)
+        masks = getattr(result, "masks", None)
+        orig_shape = tuple(getattr(result, "orig_shape", (0, 0)))
+
+        xyxy_list = boxes.xyxy.detach().cpu().numpy().astype(int) if boxes is not None and boxes.xyxy is not None else None
+        conf_list = boxes.conf.detach().cpu().numpy() if boxes is not None and boxes.conf is not None else None
+        cls_list = boxes.cls.detach().cpu().numpy().astype(int) if boxes is not None and boxes.cls is not None else None
+        mask_list = masks.data.detach().cpu().numpy() if masks is not None and masks.data is not None else None
+  
+        num_objects = len(xyxy_list) if xyxy_list is not None else len(mask_list) if mask_list is not None else 0
+        print(f"\tNum of objects detected: {num_objects}")
+
+        objects = []
+        for obj_idx in range(num_objects):
+
+            bbox = None
+            confidence = None
+            class_id = -1
+            label = f"object_{obj_idx}"
+            mask = None
+
+            if xyxy_list is not None:
+                x1, y1, x2, y2 = xyxy_list[obj_idx].tolist()
+                bbox = (int(x1), int(y1), int(x2), int(y2))
+
+            if conf_list is not None:
+                confidence = float(conf_list[obj_idx])
+            if cls_list is not None:
+                class_id = int(cls_list[obj_idx])
+                label = self._extract_label(result, class_id, obj_idx)
+            # for now, the goald is simpler, metadata and reveal will be on label-level, no instance wise tracking is done within the lable
+            # SAM does not provide direct instaance level tracking unless you provide more finer grained prompts for each
+            print(f"\t\tExtracting detection info for object: class_id - {class_id}, label - {label}")
+
+            if mask_list is not None:
+                raw_mask = (mask_list[obj_idx] > 0.5).astype(np.uint8)
+                mask = self._resize_mask_to_orig(raw_mask, orig_shape)
+
+            objects.append(
+                DetectedObject(
+                    object_idx=obj_idx,
+                    custom_tracked_object_id=label,  # label-level identity, TODO: need a approch to find intance level ids in future
+                    label=label,
+                    class_id=class_id,
+                    confidence=confidence,
+                    bbox=bbox,
+                    mask=mask,
+                )
+            )
+        # return the dection data of the frame immediately for the processing
+        return FrameDetections(
+            frame_idx=frame_idx,
+            source_path=source_path,
+            orig_shape=orig_shape,
+            objects=objects,
+        )
