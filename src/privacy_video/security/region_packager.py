@@ -9,9 +9,10 @@ import numpy as np
 
 from common.security import aes_gcm_encrypt, b64e
 
+# this class has utils required to encrypt and pack a given privacy region
 
 @dataclass
-class RegionEntryInput:
+class PrivateRegionEntryInput:
     region_id: str
     object_id: str
     frame_idx: int
@@ -45,7 +46,7 @@ def encode_mask_payload(mask: np.ndarray | None, bbox: tuple[int, int, int, int]
     }
 
 
-def build_region_entry(inp: RegionEntryInput, object_key: bytes) -> Dict[str, Any]:
+def build_private_region_entry(inp: PrivateRegionEntryInput, object_key: bytes) -> Dict[str, Any]:
     crop_png = encode_png_bytes(inp.crop)
     enc = aes_gcm_encrypt(object_key, crop_png)
 
@@ -65,18 +66,3 @@ def build_region_entry(inp: RegionEntryInput, object_key: bytes) -> Dict[str, An
         "ciphertext": enc["ciphertext"],
     }
     return entry
-
-
-def build_region_package(
-    media_id: str,
-    media_type: str,
-    placement_mode: str,
-    encrypted_regions: List[Dict[str, Any]],
-) -> Dict[str, Any]:
-    return {
-        "version": 1,
-        "media_id": media_id,
-        "media_type": media_type,
-        "placement_mode": placement_mode,
-        "encrypted_regions": encrypted_regions,
-    }

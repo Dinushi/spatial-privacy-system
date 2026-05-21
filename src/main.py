@@ -45,7 +45,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--crop-mode", choices=["mask", "bbox"], default="mask", help="Use mask or bbox for cropping/blur")
     parser.add_argument("--public-key", default="../keys/device_public.pem", help="Path to device RSA public key PEM file")
     parser.add_argument("--vid-stride", default=1, help="Video stride rate for frame skipping for efficiency")
-    parser.add_argument("--embed-payloads", action="store_true", help="Embed encrypted payloads into final blurred media file") # this should be true most of the time
+    parser.add_argument("--no-save-payloads", action="store_false",dest="save_payloads", help="Disable saving intermediate payload files") # this arg param should be just set for computation time measurements
+    parser.set_defaults(save_payloads=True)
     return parser
 
 
@@ -67,7 +68,7 @@ def main() -> None:
     while (Path(args.output_root) / f"predict_{i}").exists():i += 1
     predict_output_folder = Path(args.output_root) / f"predict_{i}"
 
-    metadata = run_privacy_pipeline(
+    run_privacy_pipeline(
         source_path=args.source,
         model_path=args.model,
         output_root=predict_output_folder,
@@ -76,23 +77,22 @@ def main() -> None:
         crop_mode=args.crop_mode,
         public_key_path=args.public_key,
         video_stride=int(args.vid_stride),
-        embed_payloads=args.embed_payloads,
+        save_payloads=args.save_payloads,
     )
-    end_time = time.time()
-    total_sec = end_time - start_time
+    total_sec = time.time() - start_time
 
-    print(f"Input type: {metadata['input_type']}")
-    print(f"Saved blurred output to: {metadata['blurred_output_path']}")
+    # print(f"Input type: {metadata['input_type']}")
+    # print(f"Saved blurred output to: {metadata['blurred_output_path']}")
     print(f"Total Time (seconds): {total_sec:.2f}")
 
 
 if __name__ == "__main__":
     main()
 
-    # python3 main.py --source ../data/input/sample_img.jpeg --crop-mode mask --embed-payloads
+    # python3 main.py --source ../data/input/sample_img.jpeg --crop-mode mask --no-save-payloads
 
-    # python3 main.py --source ../data/input/sample1.mp4 --crop-mode bbox --embed-payloads
-    # python3 main.py --source ../data/input/sample1_0.5fps.mp4 --crop-mode mask --embed-payloads
+    # python3 main.py --source ../data/input/sample1.mp4 --crop-mode bbox --no-save-payloads
+    # python3 main.py --source ../data/input/sample1_0.5fps.mp4 --crop-mode mask --no-save-payloads
 
 
  #CUDA_VISIBLE_DEVICES=1
@@ -124,8 +124,9 @@ if __name__ == "__main__":
 
 
 
-# python3 main.py --source ../data/input/RealWorld/quest_1.mp4
+# CUDA_VISIBLE_DEVICES=1 python3 main.py --source ../data/input/RealWorld/quest_1.mp4
 # python3 main.py --source ../data/input/RealWorld/quest_2.mp4
 
 
 
+#CUDA_VISIBLE_DEVICES=1

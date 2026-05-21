@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 import cv2
 import numpy as np
 import time
+import json
 
 from privacy_video.metadata.json_writer import JSONWriter
 from privacy_video.models.SAM_result import FrameDetections
@@ -31,6 +32,7 @@ from common.security import (
 )
 from privacy_video.security.media_embedder import MediaEmbedder
 from privacy_video.security.object_id_assigner import StableObjectIdAssigner
+from privacy_video.security.json_generator import generate_metadata_json, build_final_embedding_payload
 from privacy_video.security.region_packager import (
     PrivateRegionEntryInput,
     build_private_region_entry,
@@ -71,6 +73,7 @@ def _frame_detection_to_metadata(frame_det: FrameDetections, crop_paths: List[Op
     }
 
 
+
 def run_privacy_pipeline(
     source_path: str | Path,
     model_path: str | Path,
@@ -80,7 +83,7 @@ def run_privacy_pipeline(
     crop_mode: str = "mask",
     public_key_path: str | Path | None = None,
     video_stride: int = 1,
-    embed_payloads: bool = False,
+    save_payloads: bool = False,
 ) -> Dict[str, Any]:
     source_path = str(source_path)
     output_root = Path(output_root)
@@ -247,6 +250,7 @@ def run_privacy_pipeline(
       
     elif is_video_file(source_path):
         # open the original source file
+        media_type = "video"
         cap = cv2.VideoCapture(source_path)
         if not cap.isOpened():
             raise RuntimeError(f"Failed to open input video: {source_path}")
@@ -263,80 +267,176 @@ def run_privacy_pipeline(
         if not writer.isOpened():
             cap.release()
             raise RuntimeError(f"Failed to open output video writer: {blurred_path}")
+        try:
+            for frame_det, sam_time in sam_processor.process_video_stream(source_path, prompts):
+                sam_total_time += sam_time
+                print(f"SAM processing time for frame {frame_det.frame_idx} : {sam_time:.2f}s")
 
-        for frame_det, sam_time in sam_processor.process_video_stream(source_path, prompts):
-            sam_total_time += sam_time
-            print(f"SAM processing time for frame {frame_det.frame_idx} : {sam_time:.2f}s")
+                post_start_time = time.time()
+                original_frame_idx = frame_det.frame_idx
+                cap.set(cv2.CAP_PROP_POS_FRAMES, original_frame_idx) # TODO: could remove this make the processing futher fast
+                print(f"Apply post processing steps based on SAM output on frame: {original_frame_idx}")
 
-            post_start_time = time.time()
-            original_frame_idx = frame_det.frame_idx
-            cap.set(cv2.CAP_PROP_POS_FRAMES, original_frame_idx) # TODO: could remove this make the processing futher fast
-            print(f"Apply post processing steps based on SAM output on frame: {original_frame_idx}")
+                for i in range(video_stride):
+                    ok, original = cap.read()
+                    if not ok or original is None:
+                        break
 
-            for i in range(video_stride):
-                ok, original = cap.read()
-                if not ok or original is None:
-                    break
+                    current_frame_id = original_frame_idx + i
+                    print(f"\tCurrent frame ID to propagate detections: {current_frame_id}")
 
-                current_frame_id = original_frame_idx + i
-                print(f"\tCurrent frame ID to propagate detections: {current_frame_id}")
+                    protected_frame = original.copy()
 
-                protected_frame = original.copy()
+                    # collect all these togther to later apply masking
+                    frame_masks = []
+                    frame_bboxes = []
+                    for det in frame_det.objects:
+                        if det.mask is None or det.bbox is None:
+                            continue
+                        label = det.label
+                        bbox = tuple(det.bbox)
+                        print(f"\t\tApply privacy on object label: {label}")
 
-                # collect all these togther to later apply masking
-                frame_masks = []
-                frame_bboxes = []
-                for det in frame_det.objects:
-                    if det.mask is None or det.bbox is None:
-                        continue
-                    label = det.label
-                    bbox = tuple(det.bbox)
-                    print(f"\tApply privacy on object label: {label}")
+                        if label not in seen_labels:
+                            seen_labels.add(label)
+                            print(f"\t\tNew object label seen: {label}")
+                        framesIDs_per_label[label].add(current_frame_id)
 
-                    if label not in seen_labels:
-                        seen_labels.add(label)
-                        print(f"\t\tNew object label seen: {label}")
-                    framesIDs_per_label[label].add(current_frame_id)
+                        frame_masks.append(det.mask)
+                        frame_bboxes.append(bbox)
 
-                    frame_masks.append(det.mask)
-                    frame_bboxes.append(bbox)
+                        crop = crop_extractor.extract_mask_crop(original, det.mask, bbox=det.bbox)
 
-                    crop = crop_extractor.extract_mask_crop(original, det.mask, bbox=det.bbox)
+                        # Maintain a seperate Id for each crop, Maintaining <Frame_Id><Lable><InstanceOccurance> is hard, so, adopt simply a unique id for each crop
+                        private_region_id = f"reg_{region_counter}"
+                        region_counter += 1
 
-                    # Maintain a seperate Id for each crop, Maintaining <Frame_Id><Lable><InstanceOccurance> is hard, so, adopt simply a unique id for each crop
-                    private_region_id = f"reg_{region_counter}"
-                    region_counter += 1
+                        encryption_key = get_or_create_AES_key_for_label(label)
+                        private_region_entry = build_private_region_entry(
+                            PrivateRegionEntryInput(
+                                region_id=private_region_id,
+                                object_id=label,          # label used as encryption identity
+                                frame_idx=current_frame_id,
+                                bbox=bbox,
+                                crop=crop,
+                                placement_mode="mask",
+                                mask=det.mask,
+                            ), encryption_key)
+                        private_region_entries.append(private_region_entry)
+                        # seperately collect private regions IDs label-wise
+                        regionIDs_per_label[label].append(private_region_id)
 
-                    encryption_key = get_or_create_AES_key_for_label(label)
-                    private_region_entry = build_private_region_entry(
-                        PrivateRegionEntryInput(
-                            region_id=private_region_id,
-                            object_id=label,          # label used as encryption identity
-                            frame_idx=current_frame_id,
-                            bbox=bbox,
-                            crop=crop,
-                            placement_mode="mask",
-                            mask=det.mask,
-                        ), encryption_key)
-                    private_region_entries.append(private_region_entry)
-                    # seperately collect private regions IDs label-wise
-                    regionIDs_per_label[label].append(private_region_id)
+                    # Apply pixelate blur at once for all the object masks
+                    protected_frame = blur_processor.process(
+                        protected_frame,
+                        masks=frame_masks,
+                        bboxes=frame_bboxes,
+                    )
+                    print(f"\tApplied privacy blurring on original frame")
+                    writer.write(protected_frame)
+                post_processing_time = time.time() - post_start_time
+                post_processing_total_time += post_processing_time
 
-                # Apply pixelate blur at once for all the object masks
-                protected_frame = blur_processor.process(
-                    protected_frame,
-                    masks=frame_masks,
-                    bboxes=frame_bboxes,
-                )
-                print(f"\tApplied privacy blurring on original frame")
-                writer.write(protected_frame)
-            post_processing_time = time.time() - post_start_time
-            post_processing_total_time += post_processing_time
-            
+        finally:
+            cap.release()
+            writer.release()   
 
         print(f"SAM Time (seconds) : {(sam_total_time):.2f}")
         print(f"Post-Processing Time (seconds): {post_processing_total_time:.2f}")
 
+        # ---------------------------------------------------------
+        # 1. save metadata file
+        # ---------------------------------------------------------
+
+        metadata = generate_metadata_json(
+            media_id=media_id,
+            media_type=media_type,
+            source_path=source_path,
+            blurred_output_path=str(blurred_path),
+            fps=fps if media_type == "video" else None,
+            width=width if media_type == "video" else None,
+            height=height if media_type == "video" else None,
+            total_frames=total_frames if media_type == "video" else None,
+            video_stride=video_stride if media_type == "video" else None,
+            seen_labels=seen_labels,
+            framesIDs_per_label=framesIDs_per_label,
+            regionIDs_per_label=regionIDs_per_label,
+            sam_total_time=sam_total_time,
+            post_processing_total_time=post_processing_total_time,
+        )
+        if save_payloads:
+            _save_json(output_root / "general_metadata.json", metadata)
+
+        # ---------------------------------------------------------
+        # 2. save encrypted private regions file
+        #    This contains ciphertext crops, bbox, masks, frame_idx.
+        #    Organized under labels
+        # ---------------------------------------------------------
+
+        encrypted_private_regions = {
+            "version": 1,
+            "media_id": media_id,
+            "media_type": media_type,
+            "placement_mode": crop_mode,
+            "encrypted_private_regions": private_region_entries,
+        }
+        if save_payloads:
+            encrypted_regions_path = output_root / "encrypted_private_regions.json"
+            _save_json(encrypted_regions_path, encrypted_private_regions)
+
+        # ---------------------------------------------------------
+        # 3. Key registry plaintext
+        #    Then encrypt whole registry using device/server public key.
+        # ---------------------------------------------------------
+
+        AESkey_registry_plain = {
+            "version": 1,
+            "media_id": media_id,
+            "key_scope": "label",
+            "wrapped_label_keys": [
+                {
+                    "label": label,
+                    "key_id": f"key_{label}",
+                    "sym_alg": "AES-256-GCM",
+                    "raw_key_base64_note": "raw AES key is encrypted inside registry; not exposed directly",
+                    "allowed_region_ids": regionIDs_per_label[label],
+                    "wrapped_key": rsa_wrap_key(public_key, key),
+                    "wrap_alg": "RSA-OAEP-SHA256",
+                }
+                for label, key in AES_keys_per_label.items()
+            ],
+        }
+        if save_payloads:
+            # this saved simply for verification only
+            key_registry_path = output_root / "AESkey_registry_plain.json"
+            _save_json(key_registry_path, AESkey_registry_plain)
+
+        # This is the content that will be embedded into the saved media, which has AES encryption wrap keys in encrypted format 
+        # encrypted using device's public key and the AES keys can be retrived only after decryption by the device using its public key
+        encrypted_AES_encryption_key_registry = {
+            "version": 1,
+            "media_id": media_id,
+            "enc_alg": "hybrid-json",
+            **encrypt_json_hybrid(public_key, AESkey_registry_plain),
+        }
+        if save_payloads:
+            encrypte_key_registry_path = output_root / "AESkey_registry_encrypted.json"
+            _save_json(encrypte_key_registry_path, encrypted_AES_encryption_key_registry)
+
+        # -----------------------------------------------------------
+        # 4. Embed all three files into the same blurred media output
+        # -----------------------------------------------------------
+
+        payload_bytes = build_final_embedding_payload(
+                media_id=media_id,
+                metadata=metadata,
+                encrypted_private_regions=encrypted_private_regions,
+                encrypted_key_registry=encrypted_AES_encryption_key_registry,
+            )
+        MediaEmbedder.embed_payload_in_file(
+            media_path=blurred_path,
+            payload_bytes=payload_bytes,
+        )
 
 
         ####

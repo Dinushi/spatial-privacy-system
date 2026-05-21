@@ -11,20 +11,7 @@ LEN_FMT = ">Q"  # unsigned 64-bit big endian
 
 
 class MediaEmbedder:
-    @staticmethod
-    def build_payload(
-        encrypted_metadata_file: Dict[str, Any],
-        region_package: Dict[str, Any],
-        object_key_registry: Dict[str, Any],
-    ) -> bytes:
-        payload = {
-            "version": 1,
-            "encrypted_metadata_file": encrypted_metadata_file,
-            "embedded_encrypted_region_package": region_package,
-            "object_symmetric_key_registry": object_key_registry,
-        }
-        return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-
+   
     @staticmethod
     def embed_payload_in_file(media_path: str | Path, payload_bytes: bytes) -> None:
         media_path = Path(media_path)
