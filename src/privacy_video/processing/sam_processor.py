@@ -25,7 +25,7 @@ class SAMProcessor:
         self,
         model_path: str | Path,
         conf: float = 0.25,
-        imgsz: int = 640,
+        imgsz: int = 644,
         half: bool = False,
         vid_stride: int = 1,
     ) -> None:
@@ -43,7 +43,7 @@ class SAMProcessor:
             mode="predict",
             model=self.model_path,
             half=self.half,
-            save=True,
+            save=False,
         )
         return SAM3SemanticPredictor(overrides=overrides)
 
@@ -190,6 +190,8 @@ class SAMProcessor:
 
         predictor = self._make_image_predictor()
         predictor.set_image(image_path)
+        
+        start = time.time()
         results = predictor(text=prompts)
 
         if not results:
@@ -200,8 +202,18 @@ class SAMProcessor:
                 objects=[],
             )
 
-        return self._parse_result(results[0], objectID_assigner, frame_idx=0, source_path=image_path)
+        frame_det = self._parse_result_simple(
+                result=results[0],
+                frame_idx=0,
+                source_path=image_path,
+            )
+        sam_time = time.time() - start
+    
+        # return self._parse_result(results[0], objectID_assigner, frame_idx=0, source_path=image_path)
+        return frame_det, sam_time
 
+    # this is stream= False execution of SAM, collect all masks detected for all frames and later apply post processing
+    # not memory efficient
     def process_video(
         self,
         video_path: str | Path,
@@ -234,6 +246,8 @@ class SAMProcessor:
 
         return frame_results
     
+    # stream = True execution of sam, a memeory efficient way to handle masks detetected.
+    # immediately apply post-processing for each frame after SAM detections
     def process_video_stream(
         self,
         video_path: str | Path,
