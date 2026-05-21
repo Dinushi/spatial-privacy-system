@@ -31,7 +31,7 @@ def iou_xyxy(a: Tuple[int, int, int, int], b: Tuple[int, int, int, int]) -> floa
 
     return inter / union if union > 0 else 0.0
 
-
+# TODO: the logoc of this object level ID assigment does not work as expected and currently not used in logic as label level identification is used for now
 class StableObjectIdAssigner:
     def __init__(self, iou_threshold: float = 0.3, max_gap_frames: int = 15) -> None:
         self.iou_threshold = iou_threshold # minimum overlap of bbox to consider “same object”
