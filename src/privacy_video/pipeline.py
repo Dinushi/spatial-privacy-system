@@ -11,9 +11,7 @@ import time
 
 from privacy_video.metadata.json_writer import JSONWriter
 from privacy_video.models.SAM_result import FrameDetections
-# from privacy_video.processing.blur_processor import BlurProcessor
-# from privacy_video.processing.blur_processor_single import CombinedMaskBlurProcessor
-# from privacy_video.processing.blur_processor_single_roi import CombinedMaskBBoxROIBlurProcessor
+from privacy_video.processing.blur_processor_single_roi import CombinedMaskBBoxROIBlurProcessor
 from privacy_video.processing.blur_processor_pixelate import CombinedMaskPixelateProcessor
 from privacy_video.processing.crop_extractor import CropExtractor
 from privacy_video.processing.privacy_prompt_processor import PrivacyPromptProcessor
@@ -76,6 +74,7 @@ def run_privacy_pipeline(
     SAM_type: str = None,
     prompts: Optional[List[str]] = None,
     crop_mode: str = "mask",
+    blur_type: str = "Pb",
     public_key_path: str | Path | None = None,
     video_stride: int = 1,
     save_payloads: bool = False,
@@ -97,10 +96,12 @@ def run_privacy_pipeline(
     print("Create SAM Processor Object")
     sam_processor = create_SAM_processor_object(SAM_type, video_stride, model_path)
   
-    # blur_processor = BlurProcessor()
-    # blur_processor = CombinedMaskBlurProcessor()
-    # blur_processor = CombinedMaskBBoxROIBlurProcessor()
-    blur_processor = CombinedMaskPixelateProcessor(pixel_size=40)
+    if (blur_type == "Gb"):
+        blur_processor = CombinedMaskBBoxROIBlurProcessor(ksize = (101, 101))
+    elif(blur_type == "Pb"):
+        blur_processor = CombinedMaskPixelateProcessor(pixel_size=40)
+    else:
+        return 
 
     object_assigner = StableObjectIdAssigner()
 
@@ -131,7 +132,6 @@ def run_privacy_pipeline(
         media_type = "image"
         print("Start processing Image ->")
         frame_det, sam_total_time = sam_processor.process_image(source_path, prompts, object_assigner)
-
 
         original_img = cv2.imread(source_path)
         if original_img is None:
@@ -221,7 +221,7 @@ def run_privacy_pipeline(
 
                 post_start_time = time.time()
                 original_frame_idx = frame_det.frame_idx
-                cap.set(cv2.CAP_PROP_POS_FRAMES, original_frame_idx) # TODO: could remove this make the processing futher fast
+                # cap.set(cv2.CAP_PROP_POS_FRAMES, original_frame_idx) # TODO: could remove this make the processing futher fast
                 print(f"Apply post processing steps based on SAM output on frame: {original_frame_idx}")
 
                 for i in range(video_stride):
