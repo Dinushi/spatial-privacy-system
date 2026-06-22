@@ -21,24 +21,36 @@ def load_prompts_from_annotation(annotation_file_path):
 
     privacy_categories = data.get("privacy_categories", {})
 
+    category_wise_prompts = {}
+
     for category_name, category_data in privacy_categories.items():
         labels = category_data.get("Labels", [])
+
+        category_wise_prompts[category_name] = []
 
         for label in labels:
             if label and isinstance(label, str):
                 prompts.append(label.strip())
+                category_wise_prompts[category_name].append(label.strip())
 
-    # remove duplicates while preserving order
+    # add all prompts to one array, remove duplicates while preserving order
     prompts = list(dict.fromkeys(prompts))
 
-    return prompts
+    # A reverse lookup dictionary to map each prompt to its category
+    promptLabel_to_privacyCategory = {}
+    for category, labels in category_wise_prompts.items():
+        for label in labels:
+            promptLabel_to_privacyCategory[label] = category
+
+    return prompts, promptLabel_to_privacyCategory
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Privacy-preserving SAM pipeline")
     parser.add_argument("--source", required=True, help="Path to input image or video")
-
     parser.add_argument("--prompts", nargs="*", default=None, help="Optional prompt list")
+    parser.add_argument("--common-annotation-file", default=None, help="pass the name of the common annotation file placed in the source folder")
+
     parser.add_argument("--SAM-type", choices=["SAM3", "FastSAM"], default="SAM3", help="the SAM model processor that should be used for execution")
     parser.add_argument("--model", default="../models/sam3.1_multiplex.pt", help="Path to SAM3 model")
     parser.add_argument("--output-root", default="../data/output", help="Directory to save outputs")
@@ -52,36 +64,44 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
-    start_time = time.time()
+
     parser = build_parser()
     args = parser.parse_args()
 
+    file_name = Path(args.source).stem
     if (args.prompts == None):
-        file_name = Path(args.source).stem
-        annotation_file = (f"{file_name}_privacy_annotation.json") # need to make sure, the privacy annotation file always ends like this
-        print(annotation_file)
-        prompts = load_prompts_from_annotation( Path(Path(args.source).parent, annotation_file))
-        print(f"Loaded privacy prompts from file: {prompts}")
+        if (args.common_annotation_file == None):
+            annotation_file = (f"{file_name}_privacy_annotation.json") # need to make sure, the privacy annotation file always ends like this
+            print(annotation_file)
+            prompts, prompt_label_to_privacy_category = load_prompts_from_annotation( Path(Path(args.source).parent, annotation_file))
+            print(f"Loaded privacy prompts from file: {prompts}")
+        else: 
+            prompts, prompt_label_to_privacy_category = load_prompts_from_annotation( Path(Path(args.source).parent, args.common_annotation_file))
     else:
+        annotation_file = (f"{file_name}_privacy_annotation.json") # need to make sure, the privacy annotation file always ends like this
         prompts = args.prompts
 
-    i = 1
-    while (Path(args.output_root) / f"predict_{i}").exists():i += 1
-    predict_output_folder = Path(args.output_root) / f"predict_{i}"
+    # i = 1
+    # while (Path(args.output_root) / f"{file_name}_{i}").exists():i += 1
+    # predict_output_folder = Path(args.output_root) / f"{file_name}_{i}"
 
-    run_privacy_pipeline(
+    predict_output_folder = Path(args.output_root) / f"{file_name}"
+
+    start_time = time.time()
+    offical_process_pipeline_ending_time = run_privacy_pipeline(
         source_path=args.source,
         model_path=args.model,
         output_root=predict_output_folder,
         SAM_type = args.SAM_type,
         prompts=prompts,
+        prompt_label_to_privacy_category = prompt_label_to_privacy_category,
         crop_mode=args.crop_mode,
         blur_type=args.blur_type,
         public_key_path=args.public_key,
         video_stride=int(args.vid_stride),
         save_payloads=args.save_payloads,
     )
-    total_sec = time.time() - start_time
+    total_sec = offical_process_pipeline_ending_time - start_time
 
     # print(f"Input type: {metadata['input_type']}")
     # print(f"Saved blurred output to: {metadata['blurred_output_path']}")
@@ -133,4 +153,11 @@ if __name__ == "__main__":
 
 #CUDA_VISIBLE_DEVICES=1
 
-#python3 main_masking.py --source ../data/input/Spatial/Spatial-video2.MOV --crop-mode mask
+#python3 main_masking.py --source ../data/input/EgoObjects_Videos/Spatial-video2.MOV --crop-mode mask
+
+# EGO Objects new dataset, individual runs
+
+# python3 main_masking.py --source ../data/input/RESTRUCT_EGO_OBJECTS_1/0A0DD98EB432BFD4563DAB1750D552FF_01.mp4 --common-annotation-file common_privacy_annotation.json --output-root ../data/Ego_Eval
+# python3 main_masking.py --source ../data/input/RESTRUCT_EGO_OBJECTS_1/0A9CDF7364EBBFDBD4B762BA2C50EAC0_01.mp4 --common-annotation-file common_privacy_annotation.json --output-root ../data/Ego_Eval
+# python3 main_masking.py --source ../data/input/RESTRUCT_EGO_OBJECTS_1/0B2BD8C2BD046B78D989C864D7ECCB81_01.mp4 --common-annotation-file common_privacy_annotation.json --output-root ../data/Ego_Eval
+

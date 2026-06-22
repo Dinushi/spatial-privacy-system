@@ -190,3 +190,7 @@ if __name__ == "__main__":
 
 # python3 main_unmasking.py --source ../data/output/predict_1/blurred_output.png
 # python3 main_unmasking.py --source ../data/output/predict_2/blurred_output.mp4
+
+# python3 main_unmasking.py --source ../data/Ego_Eval/0A0DD98EB432BFD4563DAB1750D552FF_01/blurred_output.mp4
+# python3 main_unmasking.py --source ../data/Ego_Eval/0A9CDF7364EBBFDBD4B762BA2C50EAC0_01/blurred_output.mp4
+# python3 main_unmasking.py --source ../data/Ego_Eval/0B2BD8C2BD046B78D989C864D7ECCB81_01/blurred_output.mp4
