@@ -46,7 +46,7 @@ def create_SAM_processor_object(SAM_type, video_stride, model_path):
     if (SAM_type == "SAM3"):
         return SAMProcessor(
             model_path=model_path,
-            conf=0.25,
+            conf=0.95, # old confidence was 0.25, which made the model to do wrong predictions as private objects. They identify onn-existing objects as well if the prompt is given
             imgsz=392, # imgsz=640, imgsz=384, # Note: must be multiple of max stride 14
             half=False,  # keep stable for now
             vid_stride = video_stride
@@ -54,7 +54,7 @@ def create_SAM_processor_object(SAM_type, video_stride, model_path):
     else:
         return FastSAMProcessor(
             model_path=model_path,
-            conf=0.25,
+            conf=0.90,
             imgsz=1024,
             half=True,
             # vvid_stride = video_stride
@@ -73,11 +73,13 @@ def run_privacy_pipeline(
     output_root: str | Path,
     SAM_type: str = None,
     prompts: Optional[List[str]] = None,
+    prompt_label_to_privacy_category: Optional[dict[str, str]] = None, # holds a reverse look up table to map prompts to their privacy category
     crop_mode: str = "mask",
     blur_type: str = "Pb",
     public_key_path: str | Path | None = None,
     video_stride: int = 1,
     save_payloads: bool = False,
+    sam_processor=None,
 ) -> Dict[str, Any]:
     source_path = str(source_path)
     output_root = Path(output_root)
@@ -93,8 +95,9 @@ def run_privacy_pipeline(
     sam_total_time = 0.0
     post_processing_total_time = 0.0
 
-    print("Create SAM Processor Object")
-    sam_processor = create_SAM_processor_object(SAM_type, video_stride, model_path)
+    if sam_processor is None:
+        print("Create SAM Processor Object")
+        sam_processor = create_SAM_processor_object(SAM_type, video_stride, model_path)
   
     if (blur_type == "Gb"):
         blur_processor = CombinedMaskBBoxROIBlurProcessor(ksize = (101, 101))
@@ -125,7 +128,7 @@ def run_privacy_pipeline(
             AES_keys_per_label[label] = generate_aes256_key()
         return AES_keys_per_label[label]
 
-    # Get the privacy prompts
+    # Get the privacy prompts - the processor will be useful in future to generate prompts based on preferences in future
     prompts = prompts or PrivacyPromptProcessor().process()
 
     if is_image_file(source_path):
@@ -179,6 +182,7 @@ def run_privacy_pipeline(
                 PrivateRegionEntryInput(
                     region_id=private_region_id,
                     object_id=label,
+                    object_privacy_category = prompt_label_to_privacy_category.get(label),
                     frame_idx=0,
                     bbox=bbox,
                     crop=crop,
@@ -271,6 +275,7 @@ def run_privacy_pipeline(
                             PrivateRegionEntryInput(
                                 region_id=private_region_id,
                                 object_id=label,          # label used as encryption identity
+                                object_privacy_category = prompt_label_to_privacy_category.get(label), # privacy label category of this object
                                 frame_idx=current_frame_id,
                                 bbox=bbox,
                                 crop=crop,
@@ -298,6 +303,8 @@ def run_privacy_pipeline(
 
     print(f"SAM Time (seconds) : {(sam_total_time):.2f}")
     print(f"Post-Processing Time (seconds): {post_processing_total_time:.2f}")
+
+    offical_process_pipeline_ending_time = time.time() # record this time here, then, any time used for write lot of files won't affect for timing results
 
     # ---------------------------------------------------------
     # 1. save metadata file
@@ -392,6 +399,51 @@ def run_privacy_pipeline(
         media_path=blurred_path,
         payload_bytes=payload_bytes,
     )
+
+    # ------------------------------------------------------------------------
+    # 5. This is an ADDITIONAL file saved only for used for evaluation purposes
+    #    This contains predicted private regions only:
+    #    object_id, privacy category, frame_idx, bbox, mask metadata.
+    #    No ciphertext or crypto payloads.
+    # ------------------------------------------------------------------------
+    prediction_entries = []
+    for entry in private_region_entries:
+        prediction_entry = {
+            "region_id": entry["region_id"],
+            "object_id": entry["object_id"],
+            "object_privacy_category": entry.get("object_privacy_category"),
+            "frame_idx": entry["frame_idx"],
+            "bbox": entry["bbox"],
+            "placement_mode": crop_mode,
+            "has_mask": entry["mask"] is not None,
+            "mask": entry["mask"] if crop_mode == "mask" else None,
+        }
+        prediction_entries.append(prediction_entry)
+
+    predicted_private_regions = {
+        "version": 1,
+        "media_id": media_id,
+        "media_type": media_type,
+        "placement_mode": crop_mode,
+        "num_predicted_regions": len(prediction_entries),
+        "predicted_private_regions": prediction_entries,
+    }
+    prediction_path = output_root / "predicted_private_regions_eval.json"
+    _save_json(prediction_path, predicted_private_regions)
+
+
+    return offical_process_pipeline_ending_time
+
+
+
+
+
+
+
+
+
+
+
 
 
      ####

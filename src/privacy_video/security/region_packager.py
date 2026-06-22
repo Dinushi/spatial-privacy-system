@@ -15,6 +15,7 @@ from common.security import aes_gcm_encrypt, b64e
 class PrivateRegionEntryInput:
     region_id: str
     object_id: str
+    object_privacy_category: str
     frame_idx: int
     bbox: tuple[int, int, int, int] | None
     crop: np.ndarray
@@ -53,6 +54,7 @@ def build_private_region_entry(inp: PrivateRegionEntryInput, object_key: bytes) 
     entry: Dict[str, Any] = {
         "region_id": inp.region_id,
         "object_id": inp.object_id,
+        "object_privacy_category": inp.object_privacy_category,
         "frame_idx": int(inp.frame_idx),
         "bbox": list(inp.bbox) if inp.bbox is not None else None,
         "crop_shape": list(inp.crop.shape),

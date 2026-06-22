@@ -16,13 +16,14 @@ class PrivacyPromptProcessor(BaseProcessor):
 
     def __init__(self, prompts: Optional[List[str]] = None) -> None:
         self._prompts = prompts or [
-            "Laptop screen",
-            "Monitor Screen",
-            "ceraVe Cream Bottle",
-            "Voltren Inti-Inflammotory Cream Tube",
-            "Coffe Table",
-            "Brown cloth on sofa"
+            # "Laptop screen",
+            # "Monitor Screen",
+            # "ceraVe Cream Bottle",
+            # # "Voltren Inti-Inflammotory Cream Tube",
+            # # "Coffe Table",
+            # "Brown cloth on sofa"
         ]
+        # self.category_wise_prompts = Optional[dict[str, list[str]]]
 
     def process(self) -> List[str]:
         return self._prompts
