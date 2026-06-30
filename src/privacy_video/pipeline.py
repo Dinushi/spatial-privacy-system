@@ -19,6 +19,7 @@ from privacy_video.processing.sam_processor import SAMProcessor
 from privacy_video.processing.fast_sam_processor import FastSAMProcessor
 # from privacy_video.processing.fast_sam_trackingprocessor import FastSAMTrackProcessor
 from privacy_video.utils.file_utils import is_image_file, is_video_file, get_video_specs
+from privacy_video.utils.analysis_utils import draw_bbox_predictions_on_image, create_writer_for_bbox_drawing, draw_bboxes_on_video_frame_and_save
 
 from common.security import (
     encrypt_json_hybrid,
@@ -42,12 +43,12 @@ def _make_media_id() -> str:
     now = datetime.now(timezone.utc)
     return f"media_{now.strftime('%Y%m%d_%H%M%S')}"
 
-def create_SAM_processor_object(SAM_type, video_stride, model_path):
+def create_SAM_processor_object(SAM_type, video_stride, model_path, SAM_conf = 0.95, imgsz=392):
     if (SAM_type == "SAM3"):
         return SAMProcessor(
             model_path=model_path,
-            conf=0.95, # old confidence was 0.25, which made the model to do wrong predictions as private objects. They identify onn-existing objects as well if the prompt is given
-            imgsz=392, # imgsz=640, imgsz=384, # Note: must be multiple of max stride 14
+            conf=SAM_conf, # old confidence was 0.25, which made the model to do wrong predictions as private objects. They identify onn-existing objects as well if the prompt is given
+            imgsz=imgsz, # imgsz=640, imgsz=384, # Note: must be multiple of max stride 14  [14, 28, 42, 56, 70, 84, 98, 112, 126, 140, 154, 168, 182, 196, 210, 224, 238, 252, 266, 280, 294, 308, 322, 336, 350, 364, 378, 392]
             half=False,  # keep stable for now
             vid_stride = video_stride
         )
@@ -80,6 +81,7 @@ def run_privacy_pipeline(
     video_stride: int = 1,
     save_payloads: bool = False,
     sam_processor=None,
+    sam_confidence : float = 0.95,
 ) -> Dict[str, Any]:
     source_path = str(source_path)
     output_root = Path(output_root)
@@ -95,9 +97,12 @@ def run_privacy_pipeline(
     sam_total_time = 0.0
     post_processing_total_time = 0.0
 
+    fps = None
+    total_frames = None
+
     if sam_processor is None:
         print("Create SAM Processor Object")
-        sam_processor = create_SAM_processor_object(SAM_type, video_stride, model_path)
+        sam_processor = create_SAM_processor_object(SAM_type, video_stride, model_path, SAM_conf = sam_confidence)
   
     if (blur_type == "Gb"):
         blur_processor = CombinedMaskBBoxROIBlurProcessor(ksize = (101, 101))
@@ -199,6 +204,8 @@ def run_privacy_pipeline(
         post_processing_total_time = time.time() - post_start_time
         cv2.imwrite(str(blurred_path), protected_frame)
 
+        draw_bbox_predictions_on_image(output_root, original_img, frame_det, bbox_format="xywh")
+
     elif is_video_file(source_path):
         # open the original source file
         media_type = "video"
@@ -218,6 +225,7 @@ def run_privacy_pipeline(
         if not writer.isOpened():
             cap.release()
             raise RuntimeError(f"Failed to open output video writer: {blurred_path}")
+        bbox_writer = create_writer_for_bbox_drawing(output_root, fps, width, height) #*******TODO: remove when mesuring computation time
         try:
             for frame_det, sam_time in sam_processor.process_video_stream(source_path, prompts):
                 sam_total_time += sam_time
@@ -294,12 +302,15 @@ def run_privacy_pipeline(
                     )
                     print(f"\tApplied privacy blurring on original frame")
                     writer.write(protected_frame)
+                    draw_bboxes_on_video_frame_and_save(bbox_writer, original_img, frame_det, bbox_format="xywh") #*******TODO: remove when mesuring computation time
+
                 post_processing_time = time.time() - post_start_time
                 post_processing_total_time += post_processing_time
 
         finally:
             cap.release()
             writer.release()   
+            bbox_writer.release()  
 
     print(f"SAM Time (seconds) : {(sam_total_time):.2f}")
     print(f"Post-Processing Time (seconds): {post_processing_total_time:.2f}")
@@ -432,7 +443,7 @@ def run_privacy_pipeline(
     _save_json(prediction_path, predicted_private_regions)
 
 
-    return offical_process_pipeline_ending_time
+    return offical_process_pipeline_ending_time, total_frames, fps
 
 
 
